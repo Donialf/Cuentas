@@ -425,10 +425,54 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script type="module">
+// ── FIREBASE ──
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCCODyCCO30MqT9ZgfsnoTok-vFk5nOiGQ",
+  authDomain: "gastos-doni.firebaseapp.com",
+  projectId: "gastos-doni",
+  storageBucket: "gastos-doni.firebasestorage.app",
+  messagingSenderId: "273651371704",
+  appId: "1:273651371704:web:3eca2d2faca15945786e4d"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const DOC_ID = 'doni'; // un único documento con todos los datos
+
+// Exponer funciones de Firebase al scope global
+window._fbGuardar = async function(datos) {
+  try {
+    await setDoc(doc(db, 'datos', DOC_ID), datos);
+  } catch(e) { console.error('Firebase write error:', e); }
+};
+
+window._fbCargar = async function() {
+  try {
+    const snap = await getDoc(doc(db, 'datos', DOC_ID));
+    return snap.exists() ? snap.data() : null;
+  } catch(e) { console.error('Firebase read error:', e); return null; }
+};
+
+// Escuchar cambios en tiempo real (sincronización entre dispositivos)
+window._fbEscuchar = function(callback) {
+  return onSnapshot(doc(db, 'datos', DOC_ID), (snap) => {
+    if (snap.exists()) callback(snap.data());
+  });
+};
+
+// Iniciar app cuando Firebase esté listo
+window._firebaseReady = true;
+if (window._onFirebaseReady) window._onFirebaseReady();
+</script>
 <script>
 const PASSWORD = 'doni2001';
 const SESSION_KEY = 'gastos_session';
 let saldosOcultos = false;
+let _syncPaused = false; // evitar bucle al recibir datos de Firebase
 
 function comprobarPass() {
   const val = document.getElementById('login-input').value;
@@ -437,7 +481,7 @@ function comprobarPass() {
     sessionStorage.setItem(SESSION_KEY, '1');
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
-    renderAll();
+    cargarDatos();
   } else {
     err.style.display = 'block';
     document.getElementById('login-input').value = '';
@@ -469,10 +513,10 @@ const CATS_ING = [
 const CUENTA_COLORS = ['#3266ad','#1D9E75','#D4537E','#E24B4A','#BA7517','#888780','#7c3aed','#0891b2','#b45309','#374151'];
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
-let gastos       = JSON.parse(localStorage.getItem('mis_gastos_v1') || '[]');
-let ingresos     = JSON.parse(localStorage.getItem('mis_ingresos_v1') || '[]');
-let cuentas      = JSON.parse(localStorage.getItem('mis_cuentas_v1') || '[]');
-let transferencias = JSON.parse(localStorage.getItem('mis_transferencias_v1') || '[]');
+let gastos       = [];
+let ingresos     = [];
+let cuentas      = [];
+let transferencias = [];
 let mesActual    = new Date().getMonth();
 let anioActual   = new Date().getFullYear();
 let catSel       = 'comida';
@@ -484,10 +528,74 @@ let editandoCuentaId = null;
 let colorSel     = CUENTA_COLORS[0];
 let chartCat     = null, chartMeses = null;
 
-function guardarGastos()         { localStorage.setItem('mis_gastos_v1', JSON.stringify(gastos)); }
-function guardarIngresos()       { localStorage.setItem('mis_ingresos_v1', JSON.stringify(ingresos)); }
-function guardarCuentas()        { localStorage.setItem('mis_cuentas_v1', JSON.stringify(cuentas)); }
-function guardarTransferencias() { localStorage.setItem('mis_transferencias_v1', JSON.stringify(transferencias)); }
+// ── CARGA Y GUARDADO (Firebase + localStorage como caché) ──
+function datosActuales() {
+  return { gastos, ingresos, cuentas, transferencias };
+}
+
+function aplicarDatos(d) {
+  if (!d) return;
+  gastos        = d.gastos        || [];
+  ingresos      = d.ingresos      || [];
+  cuentas       = d.cuentas       || [];
+  transferencias= d.transferencias|| [];
+  // Guardar también en localStorage como caché offline
+  localStorage.setItem('mis_gastos_v1',        JSON.stringify(gastos));
+  localStorage.setItem('mis_ingresos_v1',      JSON.stringify(ingresos));
+  localStorage.setItem('mis_cuentas_v1',       JSON.stringify(cuentas));
+  localStorage.setItem('mis_transferencias_v1',JSON.stringify(transferencias));
+}
+
+async function cargarDatos() {
+  // 1. Cargar localStorage inmediatamente (para que la app no se quede en blanco)
+  gastos        = JSON.parse(localStorage.getItem('mis_gastos_v1')        || '[]');
+  ingresos      = JSON.parse(localStorage.getItem('mis_ingresos_v1')      || '[]');
+  cuentas       = JSON.parse(localStorage.getItem('mis_cuentas_v1')       || '[]');
+  transferencias= JSON.parse(localStorage.getItem('mis_transferencias_v1')|| '[]');
+  renderAll();
+
+  // 2. Intentar cargar desde Firebase
+  if (window._fbCargar) {
+    const remoto = await window._fbCargar();
+    if (remoto) {
+      _syncPaused = true;
+      aplicarDatos(remoto);
+      renderAll();
+      _syncPaused = false;
+    } else {
+      // Primera vez: subir datos locales a Firebase
+      await sincronizar();
+    }
+    // 3. Escuchar cambios en tiempo real
+    window._fbEscuchar((d) => {
+      if (_syncPaused) return;
+      _syncPaused = true;
+      aplicarDatos(d);
+      renderAll();
+      _syncPaused = false;
+    });
+  }
+}
+
+async function sincronizar() {
+  if (_syncPaused) return;
+  if (window._fbGuardar) {
+    await window._fbGuardar(datosActuales());
+  }
+}
+
+// Estas funciones ahora sincronizan con Firebase Y guardan en localStorage
+function guardarGastos()         { localStorage.setItem('mis_gastos_v1', JSON.stringify(gastos)); sincronizar(); }
+function guardarIngresos()       { localStorage.setItem('mis_ingresos_v1', JSON.stringify(ingresos)); sincronizar(); }
+function guardarCuentas()        { localStorage.setItem('mis_cuentas_v1', JSON.stringify(cuentas)); sincronizar(); }
+function guardarTransferencias() { localStorage.setItem('mis_transferencias_v1', JSON.stringify(transferencias)); sincronizar(); }
+
+// Arrancar si ya hay sesión
+if (sessionStorage.getItem(SESSION_KEY) === '1') {
+  // Esperar a que Firebase esté listo o arrancar directamente
+  if (window._firebaseReady) { cargarDatos(); }
+  else { window._onFirebaseReady = cargarDatos; }
+}
 
 function saldoReal(cuentaId) {
   const c = cuentas.find(c => c.id === cuentaId);
@@ -1188,8 +1296,6 @@ document.getElementById('modal-ing-bg').addEventListener('click',function(e){if(
 document.getElementById('modal-cuenta-bg').addEventListener('click',function(e){if(e.target===this)cerrarModalCuenta();});
 document.getElementById('modal-transfer-bg').addEventListener('click',function(e){if(e.target===this)cerrarModalTransferencia();});
 document.getElementById('modal-posicion-bg').addEventListener('click',function(e){if(e.target===this)cerrarModalPosicion();});
-
-if (sessionStorage.getItem(SESSION_KEY)==='1') renderAll();
 </script>
 </body>
 </html>
