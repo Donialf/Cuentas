@@ -119,15 +119,29 @@
   .cuenta-actions { display: flex; gap: 4px; flex-shrink: 0; }
   .btn-add-cuenta { display: flex; align-items: center; gap: 8px; background: none; border: 1.5px dashed var(--border); border-radius: var(--radius); padding: 14px 16px; font-size: 14px; color: var(--text2); cursor: pointer; font-family: inherit; width: 100%; justify-content: center; margin-top: 4px; }
   .cuenta-tipo-badge { font-size: 11px; color: var(--text2); margin-top: 1px; }
+  .cuenta-card-clickable { cursor: pointer; transition: opacity 0.15s; }
+  .cuenta-card-clickable:active { opacity: 0.7; }
   .inv-posicion-list { border-top: 0.5px solid var(--border); margin-top: 8px; padding-top: 6px; }
-  .inv-posicion-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 0.5px solid var(--border); cursor: pointer; }
+  .inv-posicion-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 0.5px solid var(--border); cursor: pointer; }
   .inv-posicion-row:last-child { border-bottom: none; }
   .inv-ticker { font-size: 13px; font-weight: 700; color: var(--blue); }
   .inv-qty { font-size: 11px; color: var(--text2); }
   .inv-val { font-size: 14px; font-weight: 600; }
   .inv-precio { font-size: 11px; color: var(--text2); text-align: right; }
-  .liquidez-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--text2); padding: 4px 0; border-top: 0.5px solid var(--border); margin-top: 4px; }
+  .liquidez-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--text2); padding: 6px 0; border-top: 0.5px solid var(--border); margin-top: 4px; }
   .campo-tipo { display: none; }
+  /* Detalle cuenta */
+  #screen-detalle-cuenta { display: none; padding: 1rem 1rem 6rem; }
+  #screen-detalle-cuenta.active { display: block; }
+  .detalle-saldo-card { background: var(--blue); border-radius: var(--radius); padding: 20px 16px; margin-bottom: 1rem; color: white; }
+  .detalle-saldo-card .label { font-size: 12px; opacity: 0.8; margin-bottom: 4px; }
+  .detalle-saldo-card .value { font-size: 36px; font-weight: 700; }
+  .transfer-item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 0.5px solid var(--border); }
+  .transfer-item:last-child { border-bottom: none; }
+  .transfer-icon { width: 38px; height: 38px; border-radius: 50%; background: rgba(124,58,237,0.15); display: flex; align-items: center; justify-content: center; font-size: 17px; flex-shrink: 0; color: var(--purple); }
+  .transfer-info { flex: 1; min-width: 0; }
+  .transfer-desc { font-size: 14px; font-weight: 500; }
+  .transfer-meta { font-size: 12px; color: var(--text2); margin-top: 1px; }
 
   /* TRANSFERENCIA item en historial */
   .transfer-badge { background: var(--purple); color: white; font-size: 10px; font-weight: 700; border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
@@ -265,6 +279,30 @@
     </div>
     <div id="lista-cuentas"></div>
     <button class="btn-add-cuenta" onclick="abrirModalCuenta(null)"><i class="ti ti-plus"></i> Añadir cuenta</button>
+  </div>
+
+  <!-- DETALLE CUENTA -->
+  <div id="screen-detalle-cuenta">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="back-btn" onclick="volverCuentas()" aria-label="Volver"><i class="ti ti-arrow-left"></i></button>
+        <h1 id="detalle-cuenta-nombre">Cuenta</h1>
+      </div>
+      <div class="topbar-right">
+        <button class="icon-btn" onclick="editarCuentaActual()"><i class="ti ti-pencil"></i></button>
+      </div>
+    </div>
+    <div class="detalle-saldo-card" id="detalle-saldo-card">
+      <div class="label">Saldo actual</div>
+      <div class="value" id="detalle-saldo-valor">0,00 €</div>
+    </div>
+    <!-- Info específica según tipo -->
+    <div id="detalle-tipo-info"></div>
+    <!-- Historial de movimientos de esta cuenta -->
+    <div class="section-card">
+      <div class="section-title">Movimientos de esta cuenta</div>
+      <div id="detalle-historial"></div>
+    </div>
   </div>
 
   <!-- NAV + FABs -->
@@ -459,7 +497,10 @@ function saldoReal(cuentaId) {
   }
   if (c.tipo === 'inversion') {
     const invVal = (c.posiciones || []).reduce((s,p) => s + (p.precioActual||0)*(p.qty||0), 0);
-    return invVal + (c.liquidez || 0);
+    // Liquidez base + transferencias recibidas - transferencias enviadas
+    const salidas  = transferencias.filter(t => t.origenId === cuentaId).reduce((s,t) => s+t.cantidad, 0);
+    const entradas = transferencias.filter(t => t.destinoId === cuentaId).reduce((s,t) => s+t.cantidad, 0);
+    return invVal + (c.liquidez || 0) + entradas - salidas;
   }
   // Normal
   const gastado  = gastos.filter(g => g.cuentaId === cuentaId).reduce((s,g) => s+g.cantidad, 0);
@@ -483,6 +524,8 @@ function volverInicio() {
 
 function irA(screen, btn) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-detalle-cuenta').classList.remove('active');
+  detalleCuentaId = null;
   document.getElementById('screen-' + screen).classList.add('active');
   const nav = document.getElementById('main-nav');
   const fabGasto = document.getElementById('fab-gasto');
@@ -571,13 +614,35 @@ function itemHTML(g, conAcciones) {
   </div>`;
 }
 
+function transferItemHTML(t) {
+  const desde = cuentas.find(c=>c.id===t.origenId);
+  const hasta = cuentas.find(c=>c.id===t.destinoId);
+  const fecha = new Date(t.fecha);
+  const fechaStr = fecha.toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) + ' · ' + fecha.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+  return `<div class="transfer-item">
+    <div class="transfer-icon"><i class="ti ti-arrows-exchange"></i></div>
+    <div class="transfer-info">
+      <div class="transfer-desc">Transferencia</div>
+      <div class="transfer-meta">${desde?desde.nombre:'?'} → ${hasta?hasta.nombre:'?'} · ${fechaStr}</div>
+    </div>
+    <div class="gasto-amount" style="color:var(--purple)">${t.cantidad.toFixed(2).replace('.',',')} €</div>
+  </div>`;
+}
+
 function renderListaReciente(gm, im) {
   const el = document.getElementById('lista-reciente');
   if (!el) return;
   const gastosItems = gm.map(g => ({ ...g, _tipo: 'gasto' }));
   const ingresosItems = (im||[]).map(i => ({ ...i, _tipo: 'ingreso' }));
-  const todos = [...gastosItems, ...ingresosItems].sort((a,b) => new Date(b.fecha)-new Date(a.fecha)).slice(0,8);
-  el.innerHTML = todos.length ? todos.map(m => m._tipo === 'gasto' ? itemHTML(m,false) : itemIngHTML(m,false)).join('') : '<div class="empty"><i class="ti ti-receipt-off"></i>Sin movimientos este mes</div>';
+  // Transferencias de este mes
+  const transferItems = transferencias.filter(t => {
+    const d = new Date(t.fecha);
+    return d.getMonth()===mesActual && d.getFullYear()===anioActual;
+  }).map(t => ({ ...t, _tipo: 'transfer' }));
+  const todos = [...gastosItems, ...ingresosItems, ...transferItems].sort((a,b) => new Date(b.fecha)-new Date(a.fecha)).slice(0,10);
+  el.innerHTML = todos.length
+    ? todos.map(m => m._tipo==='gasto' ? itemHTML(m,false) : m._tipo==='ingreso' ? itemIngHTML(m,false) : transferItemHTML(m)).join('')
+    : '<div class="empty"><i class="ti ti-receipt-off"></i>Sin movimientos este mes</div>';
 }
 
 function renderHistorial(gm) {
@@ -730,39 +795,14 @@ function renderCuentas() {
     const tipoLabel = tipo === 'crypto' ? 'Crypto' : tipo === 'inversion' ? 'Inversión' : 'Normal';
     const tipoIcon = tipo === 'crypto' ? 'ti-currency-bitcoin' : tipo === 'inversion' ? 'ti-trending-up' : 'ti-wallet';
 
-    let extra = '';
-    if (tipo === 'crypto') {
-      const precio = c.precioActual ? c.precioActual.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' €/u' : 'cargando...';
-      extra = `<div class="cuenta-tipo-badge">${c.cantidad || 0} ${(c.ticker||'').toUpperCase()} · ${precio}</div>`;
-    } else if (tipo === 'inversion') {
-      const posiciones = (c.posiciones||[]).sort((a,b)=>((b.precioActual||0)*b.qty)-((a.precioActual||0)*a.qty));
-      let posHTML = '';
-      if (c.liquidez) posHTML += `<div class="liquidez-row"><span>💵 Liquidez</span><span>${c.liquidez.toFixed(2).replace('.',',')} €</span></div>`;
-      posHTML += posiciones.map((p,idx) => {
-        const val = (p.precioActual||0)*p.qty;
-        return `<div class="inv-posicion-row" onclick="abrirModalPosicion('${c.id}',${idx})">
-          <div><div class="inv-ticker">${p.nombre||p.ticker}</div><div class="inv-qty">${p.qty} acc · ${p.ticker}</div></div>
-          <div style="text-align:right"><div class="inv-val">${val.toFixed(2).replace('.',',')} €</div><div class="inv-precio">${p.precioActual?p.precioActual.toFixed(2)+' €/acc':'sin precio'}</div></div>
-        </div>`;
-      }).join('');
-      posHTML += `<div class="inv-posicion-row" onclick="abrirModalPosicion('${c.id}',-1)" style="color:var(--blue);font-size:13px;justify-content:center"><i class="ti ti-plus" style="margin-right:4px"></i> Añadir posición</div>`;
-      extra = `<div class="inv-posicion-list">${posHTML}</div>`;
-    }
-
-    return `<div class="cuenta-card" style="flex-direction:column;align-items:stretch">
-      <div style="display:flex;align-items:center;gap:12px">
-        <div class="cuenta-icon" style="background:${c.color||'#3266ad'}22;"><i class="ti ${tipoIcon}" style="color:${c.color||'#3266ad'};"></i></div>
-        <div class="cuenta-info">
-          <div class="cuenta-nombre">${c.nombre}</div>
-          <div class="cuenta-tipo-badge">${tipoLabel}</div>
-          <div class="cuenta-saldo ${saldosOcultos?'oculto':''}" style="color:${saldo<0?'var(--red)':'var(--text)'}">${saldo.toFixed(2).replace('.',',')} €</div>
-        </div>
-        <div class="cuenta-actions">
-          <button class="gasto-btn edit" onclick="abrirModalCuenta('${c.id}')"><i class="ti ti-pencil"></i></button>
-          <button class="gasto-btn del" onclick="borrarCuenta('${c.id}')"><i class="ti ti-trash"></i></button>
-        </div>
+    return `<div class="cuenta-card cuenta-card-clickable" onclick="abrirDetalleCuenta('${c.id}')">
+      <div class="cuenta-icon" style="background:${c.color||'#3266ad'}22;"><i class="ti ${tipoIcon}" style="color:${c.color||'#3266ad'};"></i></div>
+      <div class="cuenta-info">
+        <div class="cuenta-nombre">${c.nombre}</div>
+        <div class="cuenta-tipo-badge">${tipoLabel}</div>
+        <div class="cuenta-saldo ${saldosOcultos?'oculto':''}" style="color:${saldo<0?'var(--red)':'var(--text)'}">${saldo.toFixed(2).replace('.',',')} €</div>
       </div>
-      ${extra}
+      <i class="ti ti-chevron-right" style="color:var(--text2);font-size:18px;flex-shrink:0"></i>
     </div>`;
   }).join('');
 
@@ -801,6 +841,106 @@ async function fetchStockPrice(c, p) {
   } catch {}
 }
 
+// ── DETALLE CUENTA ──
+let detalleCuentaId = null;
+
+function abrirDetalleCuenta(id) {
+  detalleCuentaId = id;
+  const c = cuentas.find(c=>c.id===id);
+  if (!c) return;
+  // Ocultar pantalla cuentas, mostrar detalle
+  document.getElementById('screen-cuentas').classList.remove('active');
+  document.getElementById('screen-detalle-cuenta').classList.add('active');
+  document.getElementById('fab-transferencia').style.display = 'flex';
+  renderDetalleCuenta();
+}
+
+function volverCuentas() {
+  detalleCuentaId = null;
+  document.getElementById('screen-detalle-cuenta').classList.remove('active');
+  document.getElementById('screen-cuentas').classList.add('active');
+  renderCuentas();
+}
+
+function editarCuentaActual() {
+  if (detalleCuentaId) abrirModalCuenta(detalleCuentaId);
+}
+
+function renderDetalleCuenta() {
+  const c = cuentas.find(c=>c.id===detalleCuentaId);
+  if (!c) return;
+  const saldo = saldoReal(c.id);
+  const tipo = c.tipo || 'normal';
+
+  document.getElementById('detalle-cuenta-nombre').textContent = c.nombre;
+  document.getElementById('detalle-saldo-card').style.background = c.color || 'var(--blue)';
+  document.getElementById('detalle-saldo-valor').textContent = saldo.toFixed(2).replace('.',',') + ' €';
+
+  // Info específica según tipo
+  const tipoInfo = document.getElementById('detalle-tipo-info');
+  if (tipo === 'crypto') {
+    const precio = c.precioActual ? c.precioActual.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:6}) + ' €' : 'cargando...';
+    tipoInfo.innerHTML = `<div class="section-card">
+      <div class="section-title">Info Crypto</div>
+      <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px">
+        <span style="color:var(--text2)">Monedas</span><span>${c.cantidad} ${c.ticker.toUpperCase()}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-top:0.5px solid var(--border)">
+        <span style="color:var(--text2)">Precio actual</span><span>${precio}</span>
+      </div>
+    </div>`;
+  } else if (tipo === 'inversion') {
+    const posiciones = (c.posiciones||[]).sort((a,b)=>((b.precioActual||0)*b.qty)-((a.precioActual||0)*a.qty));
+    const transEntradas = transferencias.filter(t=>t.destinoId===c.id).reduce((s,t)=>s+t.cantidad,0);
+    const transSalidas = transferencias.filter(t=>t.origenId===c.id).reduce((s,t)=>s+t.cantidad,0);
+    let posHTML = '';
+    if (c.liquidez || transEntradas || transSalidas) {
+      const liquidezTotal = (c.liquidez||0) + transEntradas - transSalidas;
+      posHTML += `<div class="liquidez-row"><span>💵 Liquidez disponible</span><span style="font-weight:600">${liquidezTotal.toFixed(2).replace('.',',')} €</span></div>`;
+    }
+    posHTML += posiciones.map((p,idx) => {
+      const val = (p.precioActual||0)*p.qty;
+      return `<div class="inv-posicion-row" onclick="abrirModalPosicion('${c.id}',${idx})">
+        <div><div class="inv-ticker">${p.nombre||p.ticker}</div><div class="inv-qty">${p.qty} acc · ${p.ticker}</div></div>
+        <div style="text-align:right"><div class="inv-val">${val.toFixed(2).replace('.',',')} €</div><div class="inv-precio">${p.precioActual?p.precioActual.toFixed(2)+' €/acc':'sin precio'}</div></div>
+      </div>`;
+    }).join('');
+    posHTML += `<div class="inv-posicion-row" onclick="abrirModalPosicion('${c.id}',-1)" style="color:var(--blue);font-size:13px;justify-content:center;padding:10px 0"><i class="ti ti-plus" style="margin-right:4px"></i> Añadir posición</div>`;
+    tipoInfo.innerHTML = `<div class="section-card"><div class="section-title">Posiciones</div><div class="inv-posicion-list" style="border-top:none;margin-top:0;padding-top:0">${posHTML}</div></div>`;
+  } else {
+    tipoInfo.innerHTML = '';
+  }
+
+  // Historial de esta cuenta
+  const histEl = document.getElementById('detalle-historial');
+  const movGastos = gastos.filter(g=>g.cuentaId===c.id).map(g=>({...g,_tipo:'gasto'}));
+  const movIngresos = ingresos.filter(i=>i.cuentaId===c.id).map(i=>({...i,_tipo:'ingreso'}));
+  const movTransfer = transferencias.filter(t=>t.origenId===c.id||t.destinoId===c.id).map(t=>({...t,_tipo:'transfer'}));
+  const todos = [...movGastos,...movIngresos,...movTransfer].sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+  histEl.innerHTML = todos.length
+    ? todos.map(m=>m._tipo==='gasto'?itemHTML(m,true):m._tipo==='ingreso'?itemIngHTML(m,true):transferItemHTMLCuenta(m,c.id)).join('')
+    : '<div class="empty" style="padding:1.5rem"><i class="ti ti-receipt-off"></i>Sin movimientos</div>';
+}
+
+function transferItemHTMLCuenta(t, cuentaId) {
+  const desde = cuentas.find(c=>c.id===t.origenId);
+  const hasta = cuentas.find(c=>c.id===t.destinoId);
+  const esSalida = t.origenId === cuentaId;
+  const fecha = new Date(t.fecha);
+  const fechaStr = fecha.toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) + ' · ' + fecha.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+  const signo = esSalida ? '-' : '+';
+  const color = esSalida ? 'var(--red)' : 'var(--green)';
+  const destLabel = esSalida ? `→ ${hasta?hasta.nombre:'?'}` : `← ${desde?desde.nombre:'?'}`;
+  return `<div class="transfer-item">
+    <div class="transfer-icon"><i class="ti ti-arrows-exchange"></i></div>
+    <div class="transfer-info">
+      <div class="transfer-desc">Transferencia ${destLabel}</div>
+      <div class="transfer-meta">${fechaStr}</div>
+    </div>
+    <div class="gasto-amount" style="color:${color}">${signo}${t.cantidad.toFixed(2).replace('.',',')} €</div>
+  </div>`;
+}
+
 // ── TRANSFERENCIAS ──
 function abrirModalTransferencia() {
   if (cuentas.length < 2) { alert('Necesitas al menos 2 cuentas para hacer una transferencia.'); return; }
@@ -832,6 +972,7 @@ function guardarTransferencia() {
   guardarTransferencias();
   cerrarModalTransferencia();
   renderAll();
+  if (detalleCuentaId) renderDetalleCuenta();
 }
 
 // ── MODAL CUENTA ──
@@ -961,6 +1102,7 @@ function guardarPosicion() {
   if (idx>=0) { c.posiciones[idx]={...c.posiciones[idx], ticker, nombre, qty}; }
   else { c.posiciones.push({ticker, nombre, qty}); }
   guardarCuentas(); cerrarModalPosicion(); renderAll();
+  if (detalleCuentaId) renderDetalleCuenta();
 }
 function borrarPosicionActual() {
   const cuentaId = document.getElementById('inp-posic-cuenta-id').value;
@@ -969,6 +1111,7 @@ function borrarPosicionActual() {
   const c = cuentas.find(c=>c.id===cuentaId);
   c.posiciones.splice(idx,1);
   guardarCuentas(); cerrarModalPosicion(); renderAll();
+  if (detalleCuentaId) renderDetalleCuenta();
 }
 
 // ── MODAL GASTO ──
