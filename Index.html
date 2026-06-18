@@ -929,19 +929,36 @@ async function fetchCryptoPrice(c) {
 }
 
 async function fetchStockPrice(c, p) {
+  const FMP_KEY = 'khDIiIPcW6mhe0N3woPJTIdPICoeq6fJ';
+  let price = null;
+
+  // 1. Intentar con Financial Modeling Prep (soporta fondos europeos en EUR)
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${p.ticker}?interval=1d&range=1d`;
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    const r = await fetch(proxy);
+    const r = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=${p.ticker}&apikey=${FMP_KEY}`);
     const d = await r.json();
-    const json = JSON.parse(d.contents);
-    const price = json?.chart?.result?.[0]?.meta?.regularMarketPrice;
-    if (price) {
-      p.precioActual = price;
-      guardarCuentas();
-      renderCuentas();
+    if (Array.isArray(d) && d[0]?.price) {
+      price = d[0].price;
     }
   } catch {}
+
+  // 2. Si FMP falla, intentar con Yahoo Finance como fallback
+  if (!price) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${p.ticker}?interval=1d&range=1d`;
+      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+      const r = await fetch(proxy);
+      const d = await r.json();
+      const json = JSON.parse(d.contents);
+      price = json?.chart?.result?.[0]?.meta?.regularMarketPrice;
+    } catch {}
+  }
+
+  if (price) {
+    p.precioActual = price;
+    guardarCuentas();
+    renderCuentas();
+    if (detalleCuentaId) renderDetalleCuenta();
+  }
 }
 
 // ── DETALLE CUENTA ──
