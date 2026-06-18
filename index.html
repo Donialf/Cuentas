@@ -353,7 +353,7 @@
   <div class="modal-bg" id="modal-transfer-bg">
     <div class="modal">
       <div class="modal-handle"></div>
-      <h2>Transferencia entre cuentas</h2>
+      <h2 id="modal-transfer-titulo">Transferencia entre cuentas</h2>
       <div class="field">
         <label>Cuenta origen (de dónde sale)</label>
         <select id="transfer-origen"></select>
@@ -366,6 +366,7 @@
       <div class="field"><label>Cantidad (€)</label><input type="number" id="transfer-cant" placeholder="0.00" min="0" step="0.01" inputmode="decimal" /></div>
       <div class="field"><label>Fecha y hora</label><input type="datetime-local" id="transfer-fecha" /></div>
       <button class="btn-guardar purple" onclick="guardarTransferencia()">Transferir</button>
+      <button class="btn-borrar" id="btn-borrar-transfer" style="display:none" onclick="borrarTransferenciaActual()">Eliminar transferencia</button>
       <button class="btn-cancelar" onclick="cerrarModalTransferencia()">Cancelar</button>
     </div>
   </div>
@@ -727,7 +728,7 @@ function transferItemHTML(t) {
   const hasta = cuentas.find(c=>c.id===t.destinoId);
   const fecha = new Date(t.fecha);
   const fechaStr = fecha.toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) + ' · ' + fecha.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
-  return `<div class="transfer-item">
+  return `<div class="transfer-item" onclick="abrirModalTransferencia('${t.id}')" style="cursor:pointer">
     <div class="transfer-icon"><i class="ti ti-arrows-exchange"></i></div>
     <div class="transfer-info">
       <div class="transfer-desc">Transferencia</div>
@@ -1039,7 +1040,7 @@ function transferItemHTMLCuenta(t, cuentaId) {
   const signo = esSalida ? '-' : '+';
   const color = esSalida ? 'var(--red)' : 'var(--green)';
   const destLabel = esSalida ? `→ ${hasta?hasta.nombre:'?'}` : `← ${desde?desde.nombre:'?'}`;
-  return `<div class="transfer-item">
+  return `<div class="transfer-item" onclick="abrirModalTransferencia('${t.id}')" style="cursor:pointer">
     <div class="transfer-icon"><i class="ti ti-arrows-exchange"></i></div>
     <div class="transfer-info">
       <div class="transfer-desc">Transferencia ${destLabel}</div>
@@ -1050,21 +1051,37 @@ function transferItemHTMLCuenta(t, cuentaId) {
 }
 
 // ── TRANSFERENCIAS ──
-function abrirModalTransferencia() {
+let editandoTransferId = null;
+
+function abrirModalTransferencia(id) {
+  editandoTransferId = id || null;
+  const t = id ? transferencias.find(t=>t.id===id) : null;
   if (cuentas.length < 2) { alert('Necesitas al menos 2 cuentas para hacer una transferencia.'); return; }
   const opts = cuentas.map(c => `<option value="${c.id}">${c.nombre} (${saldoReal(c.id).toFixed(2)} €)</option>`).join('');
   document.getElementById('transfer-origen').innerHTML = opts;
   document.getElementById('transfer-destino').innerHTML = opts;
-  if (cuentas.length >= 2) document.getElementById('transfer-destino').selectedIndex = 1;
-  document.getElementById('transfer-cant').value = '';
-  const now = new Date();
-  const pad = n => String(n).padStart(2,'0');
-  document.getElementById('transfer-fecha').value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  if (t) {
+    document.getElementById('modal-transfer-titulo').textContent = 'Editar transferencia';
+    document.getElementById('transfer-origen').value = t.origenId;
+    document.getElementById('transfer-destino').value = t.destinoId;
+    document.getElementById('transfer-cant').value = t.cantidad;
+    const d = new Date(t.fecha);
+    const pad = n=>String(n).padStart(2,'0');
+    document.getElementById('transfer-fecha').value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } else {
+    document.getElementById('modal-transfer-titulo').textContent = 'Transferencia entre cuentas';
+    if (cuentas.length >= 2) document.getElementById('transfer-destino').selectedIndex = 1;
+    document.getElementById('transfer-cant').value = '';
+    const now = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    document.getElementById('transfer-fecha').value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  }
+  document.getElementById('btn-borrar-transfer').style.display = t ? 'block' : 'none';
   document.getElementById('modal-transfer-bg').classList.add('open');
   setTimeout(()=>document.getElementById('transfer-cant').focus(),100);
 }
 
-function cerrarModalTransferencia() { document.getElementById('modal-transfer-bg').classList.remove('open'); }
+function cerrarModalTransferencia() { document.getElementById('modal-transfer-bg').classList.remove('open'); editandoTransferId=null; }
 
 function guardarTransferencia() {
   const origenId  = document.getElementById('transfer-origen').value;
@@ -1074,9 +1091,22 @@ function guardarTransferencia() {
   if (origenId === destinoId) { alert('La cuenta origen y destino no pueden ser la misma.'); return; }
   if (!cant || cant <= 0)     { alert('Introduce una cantidad válida.'); return; }
   if (!fecha)                 { alert('Selecciona fecha y hora.'); return; }
-  const saldoOrigen = saldoReal(origenId);
-  if (cant > saldoOrigen)     { alert(`Saldo insuficiente. Tienes ${saldoOrigen.toFixed(2)} € en esa cuenta.`); return; }
-  transferencias.push({ id: Date.now().toString(), origenId, destinoId, cantidad: cant, fecha: new Date(fecha).toISOString() });
+  if (editandoTransferId) {
+    const idx = transferencias.findIndex(t=>t.id===editandoTransferId);
+    if (idx!==-1) transferencias[idx] = {...transferencias[idx], origenId, destinoId, cantidad: cant, fecha: new Date(fecha).toISOString()};
+  } else {
+    transferencias.push({ id: Date.now().toString(), origenId, destinoId, cantidad: cant, fecha: new Date(fecha).toISOString() });
+  }
+  guardarTransferencias();
+  cerrarModalTransferencia();
+  renderAll();
+  if (detalleCuentaId) renderDetalleCuenta();
+}
+
+function borrarTransferenciaActual() {
+  if (!editandoTransferId) return;
+  if (!confirm('¿Eliminar esta transferencia?')) return;
+  transferencias = transferencias.filter(t=>t.id!==editandoTransferId);
   guardarTransferencias();
   cerrarModalTransferencia();
   renderAll();
