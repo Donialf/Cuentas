@@ -133,7 +133,9 @@
   /* Detalle cuenta */
   #screen-detalle-cuenta { display: none; padding: 1rem 1rem 6rem; }
   #screen-detalle-cuenta.active { display: block; }
-  .detalle-saldo-card { background: var(--blue); border-radius: var(--radius); padding: 20px 16px; margin-bottom: 1rem; color: white; }
+  .detalle-variacion { font-size: 13px; margin-top: 4px; opacity: 0.9; }
+  .periodo-btn { padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.3); background: transparent; color: white; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; opacity: 0.7; }
+  .periodo-btn.active { background: rgba(255,255,255,0.25); opacity: 1; border-color: transparent; }
   .detalle-saldo-card .label { font-size: 12px; opacity: 0.8; margin-bottom: 4px; }
   .detalle-saldo-card .value { font-size: 36px; font-weight: 700; }
   .transfer-item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 0.5px solid var(--border); }
@@ -182,7 +184,11 @@
   <div class="login-sub">Introduce tu contraseña para entrar</div>
   <input class="login-input-field" type="password" id="login-input" placeholder="••••••••" maxlength="20" />
   <button class="login-btn" onclick="comprobarPass()">Entrar</button>
+  <button class="login-btn" id="btn-faceid" onclick="loginFaceID()" style="display:none;margin-top:10px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border)">
+    <i class="ti ti-face-id" style="margin-right:6px"></i>Face ID
+  </button>
   <div class="login-error" id="login-error">Contraseña incorrecta. Inténtalo de nuevo.</div>
+  <div id="faceid-status" style="font-size:12px;color:var(--text2);margin-top:10px;display:none"></div>
 </div>
 
 <!-- APP -->
@@ -295,6 +301,24 @@
     <div class="detalle-saldo-card" id="detalle-saldo-card">
       <div class="label">Saldo actual</div>
       <div class="value" id="detalle-saldo-valor">0,00 €</div>
+      <div id="detalle-variacion" style="font-size:13px;margin-top:4px;opacity:0.9"></div>
+    </div>
+    <!-- Gráfico histórico -->
+    <div class="section-card" style="padding-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="section-title" style="margin-bottom:0">Evolución</div>
+        <div style="display:flex;gap:6px">
+          <button class="periodo-btn active" onclick="selPeriodo('1M',this)">1M</button>
+          <button class="periodo-btn" onclick="selPeriodo('3M',this)">3M</button>
+          <button class="periodo-btn" onclick="selPeriodo('1A',this)">1A</button>
+          <button class="periodo-btn" onclick="selPeriodo('MAX',this)">Máx</button>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:180px"><canvas id="chart-detalle"></canvas></div>
+      <div id="detalle-chart-empty" style="display:none;text-align:center;padding:30px 0;color:var(--text2);font-size:13px">
+        <i class="ti ti-chart-line" style="font-size:32px;display:block;margin-bottom:8px;opacity:0.4"></i>
+        Aún sin historial. Vuelve mañana para ver la evolución.
+      </div>
     </div>
     <!-- Info específica según tipo -->
     <div id="detalle-tipo-info"></div>
@@ -353,7 +377,7 @@
   <div class="modal-bg" id="modal-transfer-bg">
     <div class="modal">
       <div class="modal-handle"></div>
-      <h2 id="modal-transfer-titulo">Transferencia entre cuentas</h2>
+      <h2>Transferencia entre cuentas</h2>
       <div class="field">
         <label>Cuenta origen (de dónde sale)</label>
         <select id="transfer-origen"></select>
@@ -366,7 +390,6 @@
       <div class="field"><label>Cantidad (€)</label><input type="number" id="transfer-cant" placeholder="0.00" min="0" step="0.01" inputmode="decimal" /></div>
       <div class="field"><label>Fecha y hora</label><input type="datetime-local" id="transfer-fecha" /></div>
       <button class="btn-guardar purple" onclick="guardarTransferencia()">Transferir</button>
-      <button class="btn-borrar" id="btn-borrar-transfer" style="display:none" onclick="borrarTransferenciaActual()">Eliminar transferencia</button>
       <button class="btn-cancelar" onclick="cerrarModalTransferencia()">Cancelar</button>
     </div>
   </div>
@@ -426,11 +449,11 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<script type="module">
+<!-- Firebase compat (funciona en Safari sin type=module) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
 // ── FIREBASE ──
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
 const firebaseConfig = {
   apiKey: "AIzaSyCCODyCCO30MqT9ZgfsnoTok-vFk5nOiGQ",
   authDomain: "gastos-doni.firebaseapp.com",
@@ -439,33 +462,28 @@ const firebaseConfig = {
   messagingSenderId: "273651371704",
   appId: "1:273651371704:web:3eca2d2faca15945786e4d"
 };
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const DOC_REF = db.collection('datos').doc('doni');
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const DOC_ID = 'doni'; // un único documento con todos los datos
-
-// Exponer funciones de Firebase al scope global
 window._fbGuardar = async function(datos) {
-  try {
-    await setDoc(doc(db, 'datos', DOC_ID), datos);
-  } catch(e) { console.error('Firebase write error:', e); }
+  try { await DOC_REF.set(datos); }
+  catch(e) { console.error('Firebase write error:', e); }
 };
 
 window._fbCargar = async function() {
   try {
-    const snap = await getDoc(doc(db, 'datos', DOC_ID));
-    return snap.exists() ? snap.data() : null;
+    const snap = await DOC_REF.get();
+    return snap.exists ? snap.data() : null;
   } catch(e) { console.error('Firebase read error:', e); return null; }
 };
 
-// Escuchar cambios en tiempo real (sincronización entre dispositivos)
 window._fbEscuchar = function(callback) {
-  return onSnapshot(doc(db, 'datos', DOC_ID), (snap) => {
-    if (snap.exists()) callback(snap.data());
+  return DOC_REF.onSnapshot(snap => {
+    if (snap.exists) callback(snap.data());
   });
 };
 
-// Iniciar app cuando Firebase esté listo
 window._firebaseReady = true;
 if (window._onFirebaseReady) window._onFirebaseReady();
 </script>
@@ -475,20 +493,115 @@ const SESSION_KEY = 'gastos_session';
 let saldosOcultos = false;
 let _syncPaused = false; // evitar bucle al recibir datos de Firebase
 
+function entrarApp() {
+  sessionStorage.setItem(SESSION_KEY, '1');
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  cargarDatos();
+}
+
 function comprobarPass() {
   const val = document.getElementById('login-input').value;
   const err = document.getElementById('login-error');
   if (val === PASSWORD) {
-    sessionStorage.setItem(SESSION_KEY, '1');
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
-    cargarDatos();
+    // Si Face ID disponible pero no registrado, ofrecer registro
+    const yaRegistrado = localStorage.getItem(FACEID_KEY);
+    if (!yaRegistrado && window.PublicKeyCredential) {
+      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(ok => {
+        if (ok) {
+          const activar = confirm('¿Quieres activar Face ID para entrar más rápido la próxima vez?');
+          if (activar) registrarFaceID();
+        }
+      });
+    }
+    entrarApp();
   } else {
     err.style.display = 'block';
     document.getElementById('login-input').value = '';
     document.getElementById('login-input').focus();
   }
 }
+
+// ── FACE ID (WebAuthn) ──
+const FACEID_KEY = 'gastos_faceid_credid';
+
+async function loginFaceID() {
+  const credIdB64 = localStorage.getItem(FACEID_KEY);
+  if (!credIdB64) { await registrarFaceID(); return; }
+  try {
+    const credId = base64ToBuffer(credIdB64);
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ id: credId, type: 'public-key' }],
+        userVerification: 'required',
+        timeout: 60000,
+      }
+    });
+    if (assertion) entrarApp();
+  } catch(e) {
+    mostrarStatusFaceID('Face ID cancelado o no disponible');
+  }
+}
+
+async function registrarFaceID() {
+  mostrarStatusFaceID('Registrando Face ID...');
+  try {
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: 'Mis Gastos' },
+        user: { id: new Uint8Array(16), name: 'doni', displayName: 'Doni' },
+        pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
+        authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
+        timeout: 60000,
+      }
+    });
+    localStorage.setItem(FACEID_KEY, bufferToBase64(cred.rawId));
+    mostrarStatusFaceID('✅ Face ID registrado. Ya puedes usarlo.');
+    document.getElementById('btn-faceid').textContent = '';
+    document.getElementById('btn-faceid').innerHTML = '<i class="ti ti-face-id" style="margin-right:6px"></i>Face ID';
+  } catch(e) {
+    mostrarStatusFaceID('No se pudo registrar Face ID. Usa la contraseña.');
+  }
+}
+
+function mostrarStatusFaceID(msg) {
+  const el = document.getElementById('faceid-status');
+  el.textContent = msg; el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 3000);
+}
+
+function bufferToBase64(buffer) {
+  return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+}
+function base64ToBuffer(b64) {
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i=0; i<bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
+
+// Mostrar botón Face ID si WebAuthn está disponible
+if (window.PublicKeyCredential) {
+  PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(ok => {
+    if (ok) {
+      const yaRegistrado = localStorage.getItem(FACEID_KEY);
+      const btn = document.getElementById('btn-faceid');
+      btn.style.display = 'block';
+      if (yaRegistrado) {
+        // Si ya está registrado, disparar Face ID automáticamente
+        btn.innerHTML = '<i class="ti ti-face-id" style="margin-right:6px"></i>Entrar con Face ID';
+        btn.style.background = 'var(--blue)';
+        btn.style.color = 'white';
+        btn.style.border = 'none';
+        // Pequeño delay para que cargue la pantalla
+        setTimeout(() => loginFaceID(), 400);
+      }
+    }
+  });
+}
+
 document.getElementById('login-input').addEventListener('keydown', e => { if (e.key === 'Enter') comprobarPass(); });
 if (sessionStorage.getItem(SESSION_KEY) === '1') {
   document.getElementById('login-screen').style.display = 'none';
@@ -531,29 +644,32 @@ let chartCat     = null, chartMeses = null;
 
 // ── CARGA Y GUARDADO (Firebase + localStorage como caché) ──
 function datosActuales() {
-  return { gastos, ingresos, cuentas, transferencias };
+  return { gastos, ingresos, cuentas, transferencias, historialSaldos };
 }
 
 function aplicarDatos(d) {
   if (!d) return;
-  gastos        = d.gastos        || [];
-  ingresos      = d.ingresos      || [];
-  cuentas       = d.cuentas       || [];
-  transferencias= d.transferencias|| [];
-  // Guardar también en localStorage como caché offline
-  localStorage.setItem('mis_gastos_v1',        JSON.stringify(gastos));
-  localStorage.setItem('mis_ingresos_v1',      JSON.stringify(ingresos));
-  localStorage.setItem('mis_cuentas_v1',       JSON.stringify(cuentas));
-  localStorage.setItem('mis_transferencias_v1',JSON.stringify(transferencias));
+  gastos          = d.gastos          || [];
+  ingresos        = d.ingresos        || [];
+  cuentas         = d.cuentas         || [];
+  transferencias  = d.transferencias  || [];
+  historialSaldos = d.historialSaldos || {};
+  localStorage.setItem('mis_gastos_v1',           JSON.stringify(gastos));
+  localStorage.setItem('mis_ingresos_v1',         JSON.stringify(ingresos));
+  localStorage.setItem('mis_cuentas_v1',          JSON.stringify(cuentas));
+  localStorage.setItem('mis_transferencias_v1',   JSON.stringify(transferencias));
+  localStorage.setItem('mis_historial_saldos_v1', JSON.stringify(historialSaldos));
 }
 
 async function cargarDatos() {
-  // 1. Cargar localStorage inmediatamente (para que la app no se quede en blanco)
-  gastos        = JSON.parse(localStorage.getItem('mis_gastos_v1')        || '[]');
-  ingresos      = JSON.parse(localStorage.getItem('mis_ingresos_v1')      || '[]');
-  cuentas       = JSON.parse(localStorage.getItem('mis_cuentas_v1')       || '[]');
-  transferencias= JSON.parse(localStorage.getItem('mis_transferencias_v1')|| '[]');
+  // 1. Cargar localStorage inmediatamente
+  gastos          = JSON.parse(localStorage.getItem('mis_gastos_v1')           || '[]');
+  ingresos        = JSON.parse(localStorage.getItem('mis_ingresos_v1')         || '[]');
+  cuentas         = JSON.parse(localStorage.getItem('mis_cuentas_v1')          || '[]');
+  transferencias  = JSON.parse(localStorage.getItem('mis_transferencias_v1')   || '[]');
+  historialSaldos = JSON.parse(localStorage.getItem('mis_historial_saldos_v1') || '{}');
   renderAll();
+  snapshotAutomatico(); // Guardar saldo de hoy si toca
 
   // 2. Intentar cargar desde Firebase
   if (window._fbCargar) {
@@ -561,6 +677,7 @@ async function cargarDatos() {
     if (remoto) {
       _syncPaused = true;
       aplicarDatos(remoto);
+      snapshotAutomatico();
       renderAll();
       _syncPaused = false;
     } else {
@@ -728,7 +845,7 @@ function transferItemHTML(t) {
   const hasta = cuentas.find(c=>c.id===t.destinoId);
   const fecha = new Date(t.fecha);
   const fechaStr = fecha.toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) + ' · ' + fecha.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
-  return `<div class="transfer-item" onclick="abrirModalTransferencia('${t.id}')" style="cursor:pointer">
+  return `<div class="transfer-item">
     <div class="transfer-icon"><i class="ti ti-arrows-exchange"></i></div>
     <div class="transfer-info">
       <div class="transfer-desc">Transferencia</div>
@@ -935,23 +1052,145 @@ async function fetchCryptoPrice(c) {
 }
 
 async function fetchStockPrice(c, p) {
+  const FMP_KEY = 'khDIiIPcW6mhe0N3woPJTIdPICoeq6fJ';
+  let price = null;
+
+  // 1. Intentar con Financial Modeling Prep (soporta fondos europeos en EUR)
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${p.ticker}?interval=1d&range=1d`;
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    const r = await fetch(proxy);
+    const r = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=${p.ticker}&apikey=${FMP_KEY}`);
     const d = await r.json();
-    const json = JSON.parse(d.contents);
-    const price = json?.chart?.result?.[0]?.meta?.regularMarketPrice;
-    if (price) {
-      p.precioActual = price;
-      guardarCuentas();
-      renderCuentas();
+    if (Array.isArray(d) && d[0]?.price) {
+      price = d[0].price;
     }
   } catch {}
+
+  // 2. Si FMP falla, intentar con Yahoo Finance como fallback
+  if (!price) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${p.ticker}?interval=1d&range=1d`;
+      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+      const r = await fetch(proxy);
+      const d = await r.json();
+      const json = JSON.parse(d.contents);
+      price = json?.chart?.result?.[0]?.meta?.regularMarketPrice;
+    } catch {}
+  }
+
+  if (price) {
+    p.precioActual = price;
+    guardarCuentas();
+    renderCuentas();
+    if (detalleCuentaId) renderDetalleCuenta();
+  }
 }
 
-// ── DETALLE CUENTA ──
-let detalleCuentaId = null;
+// ── HISTORIAL DE SALDOS (snapshots diarios) ──
+// Estructura: { cuentaId: [ { fecha: 'YYYY-MM-DD', valor: 1234.56 }, ... ] }
+let historialSaldos = JSON.parse(localStorage.getItem('mis_historial_saldos_v1') || '{}');
+
+function guardarHistorialSaldos() {
+  localStorage.setItem('mis_historial_saldos_v1', JSON.stringify(historialSaldos));
+  sincronizar();
+}
+
+function snapshotAutomatico() {
+  // Solo guarda si han pasado más de 12h desde el último snapshot de cada cuenta
+  const hoy = new Date().toISOString().slice(0,10);
+  let hubocambios = false;
+  cuentas.forEach(c => {
+    if (!historialSaldos[c.id]) historialSaldos[c.id] = [];
+    const hist = historialSaldos[c.id];
+    const ultimo = hist[hist.length - 1];
+    // Si ya hay un registro de hoy, actualízalo; si no, añade nuevo
+    const saldo = saldoReal(c.id);
+    if (ultimo && ultimo.fecha === hoy) {
+      ultimo.valor = saldo;
+    } else {
+      hist.push({ fecha: hoy, valor: saldo });
+    }
+    hubocambios = true;
+  });
+  if (hubocambios) guardarHistorialSaldos();
+}
+
+let chartDetalle = null;
+let periodoActual = '1M';
+
+function selPeriodo(p, btn) {
+  periodoActual = p;
+  document.querySelectorAll('.periodo-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderGraficoDetalle();
+}
+
+function renderGraficoDetalle() {
+  const c = cuentas.find(c=>c.id===detalleCuentaId);
+  if (!c) return;
+  const hist = (historialSaldos[c.id] || []).slice().sort((a,b)=>a.fecha.localeCompare(b.fecha));
+
+  // Filtrar según periodo
+  const ahora = new Date();
+  let desde = new Date();
+  if (periodoActual === '1M') desde.setMonth(ahora.getMonth()-1);
+  else if (periodoActual === '3M') desde.setMonth(ahora.getMonth()-3);
+  else if (periodoActual === '1A') desde.setFullYear(ahora.getFullYear()-1);
+  else desde = new Date('2000-01-01');
+
+  const filtrado = periodoActual === 'MAX' ? hist : hist.filter(p => new Date(p.fecha) >= desde);
+
+  const canvas = document.getElementById('chart-detalle');
+  const emptyEl = document.getElementById('detalle-chart-empty');
+
+  if (filtrado.length < 2) {
+    canvas.style.display = 'none';
+    emptyEl.style.display = 'block';
+    return;
+  }
+  canvas.style.display = 'block';
+  emptyEl.style.display = 'none';
+
+  // Variación respecto al primer punto del periodo
+  const primero = filtrado[0].valor;
+  const ultimo = filtrado[filtrado.length-1].valor;
+  const diff = ultimo - primero;
+  const pct = primero ? ((diff/primero)*100).toFixed(2) : 0;
+  const varEl = document.getElementById('detalle-variacion');
+  const signo = diff >= 0 ? '+' : '';
+  varEl.textContent = `${signo}${diff.toFixed(2).replace('.',',')} € (${signo}${pct}%) en este periodo`;
+
+  const labels = filtrado.map(p => {
+    const d = new Date(p.fecha);
+    return d.toLocaleDateString('es-ES',{day:'2-digit',month:'short'});
+  });
+  const valores = filtrado.map(p => p.valor);
+  const color = diff >= 0 ? '#34d399' : '#f87171';
+
+  if (chartDetalle) { chartDetalle.destroy(); chartDetalle = null; }
+  chartDetalle = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: valores,
+        borderColor: color,
+        backgroundColor: color + '22',
+        fill: true,
+        tension: 0.4,
+        pointRadius: filtrado.length > 30 ? 0 : 3,
+        pointHoverRadius: 5,
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ' + ctx.parsed.y.toFixed(2).replace('.',',') + ' €' } } },
+      scales: {
+        x: { ticks: { color: 'var(--text2)', maxTicksLimit: 6, font:{size:10} }, grid: { display: false } },
+        y: { ticks: { color: 'var(--text2)', callback: v => v.toLocaleString('es-ES',{maximumFractionDigits:0}) + '€', font:{size:10} }, grid: { color: 'rgba(255,255,255,0.06)' } }
+      }
+    }
+  });
+}
 
 function abrirDetalleCuenta(id) {
   detalleCuentaId = id;
@@ -984,6 +1223,9 @@ function renderDetalleCuenta() {
   document.getElementById('detalle-cuenta-nombre').textContent = c.nombre;
   document.getElementById('detalle-saldo-card').style.background = c.color || 'var(--blue)';
   document.getElementById('detalle-saldo-valor').textContent = saldo.toFixed(2).replace('.',',') + ' €';
+  // Limpiar variación hasta que el gráfico la pinte
+  document.getElementById('detalle-variacion').textContent = '';
+  renderGraficoDetalle();
 
   // Info específica según tipo
   const tipoInfo = document.getElementById('detalle-tipo-info');
@@ -1040,7 +1282,7 @@ function transferItemHTMLCuenta(t, cuentaId) {
   const signo = esSalida ? '-' : '+';
   const color = esSalida ? 'var(--red)' : 'var(--green)';
   const destLabel = esSalida ? `→ ${hasta?hasta.nombre:'?'}` : `← ${desde?desde.nombre:'?'}`;
-  return `<div class="transfer-item" onclick="abrirModalTransferencia('${t.id}')" style="cursor:pointer">
+  return `<div class="transfer-item">
     <div class="transfer-icon"><i class="ti ti-arrows-exchange"></i></div>
     <div class="transfer-info">
       <div class="transfer-desc">Transferencia ${destLabel}</div>
@@ -1051,37 +1293,21 @@ function transferItemHTMLCuenta(t, cuentaId) {
 }
 
 // ── TRANSFERENCIAS ──
-let editandoTransferId = null;
-
-function abrirModalTransferencia(id) {
-  editandoTransferId = id || null;
-  const t = id ? transferencias.find(t=>t.id===id) : null;
+function abrirModalTransferencia() {
   if (cuentas.length < 2) { alert('Necesitas al menos 2 cuentas para hacer una transferencia.'); return; }
   const opts = cuentas.map(c => `<option value="${c.id}">${c.nombre} (${saldoReal(c.id).toFixed(2)} €)</option>`).join('');
   document.getElementById('transfer-origen').innerHTML = opts;
   document.getElementById('transfer-destino').innerHTML = opts;
-  if (t) {
-    document.getElementById('modal-transfer-titulo').textContent = 'Editar transferencia';
-    document.getElementById('transfer-origen').value = t.origenId;
-    document.getElementById('transfer-destino').value = t.destinoId;
-    document.getElementById('transfer-cant').value = t.cantidad;
-    const d = new Date(t.fecha);
-    const pad = n=>String(n).padStart(2,'0');
-    document.getElementById('transfer-fecha').value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } else {
-    document.getElementById('modal-transfer-titulo').textContent = 'Transferencia entre cuentas';
-    if (cuentas.length >= 2) document.getElementById('transfer-destino').selectedIndex = 1;
-    document.getElementById('transfer-cant').value = '';
-    const now = new Date();
-    const pad = n => String(n).padStart(2,'0');
-    document.getElementById('transfer-fecha').value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  }
-  document.getElementById('btn-borrar-transfer').style.display = t ? 'block' : 'none';
+  if (cuentas.length >= 2) document.getElementById('transfer-destino').selectedIndex = 1;
+  document.getElementById('transfer-cant').value = '';
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  document.getElementById('transfer-fecha').value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
   document.getElementById('modal-transfer-bg').classList.add('open');
   setTimeout(()=>document.getElementById('transfer-cant').focus(),100);
 }
 
-function cerrarModalTransferencia() { document.getElementById('modal-transfer-bg').classList.remove('open'); editandoTransferId=null; }
+function cerrarModalTransferencia() { document.getElementById('modal-transfer-bg').classList.remove('open'); }
 
 function guardarTransferencia() {
   const origenId  = document.getElementById('transfer-origen').value;
@@ -1091,22 +1317,9 @@ function guardarTransferencia() {
   if (origenId === destinoId) { alert('La cuenta origen y destino no pueden ser la misma.'); return; }
   if (!cant || cant <= 0)     { alert('Introduce una cantidad válida.'); return; }
   if (!fecha)                 { alert('Selecciona fecha y hora.'); return; }
-  if (editandoTransferId) {
-    const idx = transferencias.findIndex(t=>t.id===editandoTransferId);
-    if (idx!==-1) transferencias[idx] = {...transferencias[idx], origenId, destinoId, cantidad: cant, fecha: new Date(fecha).toISOString()};
-  } else {
-    transferencias.push({ id: Date.now().toString(), origenId, destinoId, cantidad: cant, fecha: new Date(fecha).toISOString() });
-  }
-  guardarTransferencias();
-  cerrarModalTransferencia();
-  renderAll();
-  if (detalleCuentaId) renderDetalleCuenta();
-}
-
-function borrarTransferenciaActual() {
-  if (!editandoTransferId) return;
-  if (!confirm('¿Eliminar esta transferencia?')) return;
-  transferencias = transferencias.filter(t=>t.id!==editandoTransferId);
+  const saldoOrigen = saldoReal(origenId);
+  if (cant > saldoOrigen)     { alert(`Saldo insuficiente. Tienes ${saldoOrigen.toFixed(2)} € en esa cuenta.`); return; }
+  transferencias.push({ id: Date.now().toString(), origenId, destinoId, cantidad: cant, fecha: new Date(fecha).toISOString() });
   guardarTransferencias();
   cerrarModalTransferencia();
   renderAll();
