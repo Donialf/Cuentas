@@ -133,7 +133,7 @@
   /* Detalle cuenta */
   #screen-detalle-cuenta { display: none; padding: 1rem 1rem 6rem; }
   #screen-detalle-cuenta.active { display: block; }
-  .detalle-variacion { font-size: 13px; margin-top: 4px; opacity: 0.9; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .periodo-btn { padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.3); background: transparent; color: white; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; opacity: 0.7; }
   .periodo-btn.active { background: rgba(255,255,255,0.25); opacity: 1; border-color: transparent; }
   .detalle-saldo-card .label { font-size: 12px; opacity: 0.8; margin-bottom: 4px; }
@@ -275,7 +275,8 @@
         <button class="back-btn" onclick="volverInicio()" aria-label="Volver"><i class="ti ti-arrow-left"></i></button>
         <h1>Cuentas</h1>
       </div>
-      <div class="topbar-right">
+      <div class="topbar-right" style="gap:6px">
+        <button class="icon-btn" id="btn-refresh-cuentas" onclick="refrescarPrecios()" aria-label="Actualizar precios"><i class="ti ti-refresh"></i></button>
         <button class="icon-btn" id="btn-ojo" onclick="toggleSaldos()" aria-label="Ocultar saldos"><i class="ti ti-eye" id="ojo-icon"></i></button>
       </div>
     </div>
@@ -294,7 +295,8 @@
         <button class="back-btn" onclick="volverCuentas()" aria-label="Volver"><i class="ti ti-arrow-left"></i></button>
         <h1 id="detalle-cuenta-nombre">Cuenta</h1>
       </div>
-      <div class="topbar-right">
+      <div class="topbar-right" style="gap:6px">
+        <button class="icon-btn" id="btn-refresh-detalle" onclick="refrescarPreciosDetalle()" aria-label="Actualizar precios"><i class="ti ti-refresh"></i></button>
         <button class="icon-btn" onclick="editarCuentaActual()"><i class="ti ti-pencil"></i></button>
       </div>
     </div>
@@ -654,6 +656,11 @@ function aplicarDatos(d) {
   cuentas         = d.cuentas         || [];
   transferencias  = d.transferencias  || [];
   historialSaldos = d.historialSaldos || {};
+  // Limpiar precios cacheados — siempre se recargan frescos
+  cuentas.forEach(c => {
+    if (c.tipo === 'crypto') delete c.precioActual;
+    if (c.tipo === 'inversion') (c.posiciones||[]).forEach(p => delete p.precioActual);
+  });
   localStorage.setItem('mis_gastos_v1',           JSON.stringify(gastos));
   localStorage.setItem('mis_ingresos_v1',         JSON.stringify(ingresos));
   localStorage.setItem('mis_cuentas_v1',          JSON.stringify(cuentas));
@@ -1114,7 +1121,41 @@ async function fetchStockPrice(c, p) {
   }
 }
 
-// ── HISTORIAL DE SALDOS (snapshots diarios) ──
+async function refrescarPrecios() {
+  const btn = document.getElementById('btn-refresh-cuentas');
+  if (btn) { btn.querySelector('i').style.animation = 'spin 1s linear infinite'; }
+  // Limpiar precios cacheados para forzar recarga
+  cuentas.forEach(c => {
+    if (c.tipo === 'crypto') delete c.precioActual;
+    if (c.tipo === 'inversion') (c.posiciones||[]).forEach(p => delete p.precioActual);
+  });
+  usdEurRate = null; // Forzar recarga del tipo de cambio
+  // Lanzar todas las peticiones
+  const promesas = [];
+  cuentas.forEach(c => {
+    if (c.tipo === 'crypto' && c.ticker) promesas.push(fetchCryptoPrice(c));
+    if (c.tipo === 'inversion') (c.posiciones||[]).forEach(p => { if(p.ticker) promesas.push(fetchStockPrice(c, p)); });
+  });
+  await Promise.all(promesas);
+  if (btn) { btn.querySelector('i').style.animation = ''; }
+  renderCuentas();
+}
+
+async function refrescarPreciosDetalle() {
+  const btn = document.getElementById('btn-refresh-detalle');
+  if (btn) { btn.querySelector('i').style.animation = 'spin 1s linear infinite'; }
+  const c = cuentas.find(c => c.id === detalleCuentaId);
+  if (c) {
+    usdEurRate = null;
+    if (c.tipo === 'crypto') { delete c.precioActual; await fetchCryptoPrice(c); }
+    if (c.tipo === 'inversion') {
+      const promesas = (c.posiciones||[]).map(p => { delete p.precioActual; return p.ticker ? fetchStockPrice(c, p) : null; }).filter(Boolean);
+      await Promise.all(promesas);
+    }
+  }
+  if (btn) { btn.querySelector('i').style.animation = ''; }
+  renderDetalleCuenta();
+}
 // Estructura: { cuentaId: [ { fecha: 'YYYY-MM-DD', valor: 1234.56 }, ... ] }
 let historialSaldos = JSON.parse(localStorage.getItem('mis_historial_saldos_v1') || '{}');
 
