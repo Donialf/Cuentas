@@ -1066,7 +1066,12 @@ async function getUsdEurRate() {
 async function fetchStockPrice(c, p) {
   const FMP_KEY = 'khDIiIPcW6mhe0N3woPJTIdPICoeq6fJ';
   let price = null;
-  let currency = 'EUR';
+  let currency = 'USD'; // Por defecto USD, solo EUR si el ticker tiene sufijo europeo
+
+  // Detectar si es ticker europeo por el sufijo
+  const ticker = p.ticker.toUpperCase();
+  const esEuropeo = /\.(DE|AS|MC|PA|MI|LS|BR|VI|HE|ST|CO|OL|F|L|SW)$/i.test(ticker) || ticker.startsWith('0P');
+  if (esEuropeo) currency = 'EUR';
 
   // 1. Intentar con Financial Modeling Prep
   try {
@@ -1074,7 +1079,8 @@ async function fetchStockPrice(c, p) {
     const d = await r.json();
     if (Array.isArray(d) && d[0]?.price) {
       price = d[0].price;
-      currency = d[0].currency || 'USD';
+      // Solo fiarse del currency de FMP si lo devuelve explícitamente
+      if (d[0].currency) currency = d[0].currency;
     }
   } catch {}
 
@@ -1087,7 +1093,8 @@ async function fetchStockPrice(c, p) {
       const d = await r.json();
       const json = JSON.parse(d.contents);
       price = json?.chart?.result?.[0]?.meta?.regularMarketPrice;
-      currency = json?.chart?.result?.[0]?.meta?.currency || 'USD';
+      const yahooCurrency = json?.chart?.result?.[0]?.meta?.currency;
+      if (yahooCurrency) currency = yahooCurrency;
     } catch {}
   }
 
@@ -1096,9 +1103,11 @@ async function fetchStockPrice(c, p) {
     if (currency === 'USD') {
       const rate = await getUsdEurRate();
       price = price * rate;
+      p.moneda = 'EUR (conv. USD)';
+    } else {
+      p.moneda = currency;
     }
     p.precioActual = price;
-    p.moneda = currency === 'USD' ? 'EUR (conv.)' : currency;
     guardarCuentas();
     renderCuentas();
     if (detalleCuentaId) renderDetalleCuenta();
