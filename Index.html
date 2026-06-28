@@ -134,6 +134,13 @@
   #screen-detalle-cuenta { display: none; padding: 1rem 1rem 6rem; }
   #screen-detalle-cuenta.active { display: block; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .patrimonio-legend-item { display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:.5px solid var(--border); }
+  .patrimonio-legend-item:last-child { border-bottom:none; }
+  .patrimonio-legend-left { display:flex;align-items:center;gap:10px; }
+  .patrimonio-dot { width:12px;height:12px;border-radius:50%;flex-shrink:0; }
+  .patrimonio-name { font-size:14px;font-weight:500; }
+  .patrimonio-val { font-size:12px;color:var(--text2);margin-top:1px; }
+  .patrimonio-pct { font-size:15px;font-weight:700; }
   .periodo-btn { padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.3); background: transparent; color: white; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; opacity: 0.7; }
   .periodo-btn.active { background: rgba(255,255,255,0.25); opacity: 1; border-color: transparent; }
   .detalle-saldo-card .label { font-size: 12px; opacity: 0.8; margin-bottom: 4px; }
@@ -276,6 +283,7 @@
         <h1>Cuentas</h1>
       </div>
       <div class="topbar-right" style="gap:6px">
+        <button class="icon-btn" onclick="abrirPatrimonio()" aria-label="Distribución patrimonio" title="Ver distribución"><i class="ti ti-chart-pie"></i></button>
         <button class="icon-btn" id="btn-refresh-cuentas" onclick="refrescarPrecios()" aria-label="Actualizar precios"><i class="ti ti-refresh"></i></button>
         <button class="icon-btn" id="btn-ojo" onclick="toggleSaldos()" aria-label="Ocultar saldos"><i class="ti ti-eye" id="ojo-icon"></i></button>
       </div>
@@ -375,7 +383,30 @@
     </div>
   </div>
 
-  <!-- Modal transferencia -->
+  <!-- Modal Patrimonio -->
+  <div class="modal-bg" id="modal-patrimonio-bg">
+    <div class="modal" style="max-height:88vh">
+      <div class="modal-handle"></div>
+      <h2 style="text-align:center;margin-bottom:4px">Distribución de patrimonio</h2>
+      <p style="text-align:center;font-size:13px;color:var(--text2);margin-bottom:16px">Porcentaje del valor total</p>
+      <div style="position:relative;width:200px;height:200px;margin:0 auto 20px">
+        <canvas id="chart-patrimonio"></canvas>
+        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none">
+          <div style="font-size:11px;color:var(--text2)">Total</div>
+          <div style="font-size:16px;font-weight:700" id="patrimonio-total-center">0 €</div>
+        </div>
+      </div>
+      <div id="patrimonio-legend"></div>
+      <div style="background:var(--bg2);border-radius:var(--radius-sm);padding:14px 16px;display:flex;align-items:center;gap:12px;margin-top:8px">
+        <i class="ti ti-wallet" style="font-size:22px;color:var(--text2)"></i>
+        <div>
+          <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px">Patrimonio financiero total</div>
+          <div style="font-size:20px;font-weight:700" id="patrimonio-total-bottom">0,00 €</div>
+        </div>
+      </div>
+      <button class="btn-cancelar" onclick="cerrarPatrimonio()">Cerrar</button>
+    </div>
+  </div>
   <div class="modal-bg" id="modal-transfer-bg">
     <div class="modal">
       <div class="modal-handle"></div>
@@ -675,6 +706,11 @@ async function cargarDatos() {
   cuentas         = JSON.parse(localStorage.getItem('mis_cuentas_v1')          || '[]');
   transferencias  = JSON.parse(localStorage.getItem('mis_transferencias_v1')   || '[]');
   historialSaldos = JSON.parse(localStorage.getItem('mis_historial_saldos_v1') || '{}');
+  // Limpiar precios cacheados para siempre recargar frescos
+  cuentas.forEach(c => {
+    if (c.tipo === 'crypto') delete c.precioActual;
+    if (c.tipo === 'inversion') (c.posiciones||[]).forEach(p => delete p.precioActual);
+  });
   renderAll();
   snapshotAutomatico(); // Guardar saldo de hoy si toca
 
@@ -1642,6 +1678,87 @@ function setupSwipeClose(modalBgId, cerrarFn) {
   });
 }
 
+// ── PATRIMONIO ──
+let chartPatrimonio = null;
+
+function abrirPatrimonio() {
+  renderPatrimonio();
+  document.getElementById('modal-patrimonio-bg').classList.add('open');
+}
+function cerrarPatrimonio() {
+  document.getElementById('modal-patrimonio-bg').classList.remove('open');
+}
+
+function renderPatrimonio() {
+  // Agrupar cuentas por tipo
+  const grupos = {};
+  const coloresTipo = {
+    'normal':    '#378ADD',
+    'inversion': '#1D9E75',
+    'crypto':    '#f7931a',
+  };
+  const nombresTipo = {
+    'normal':    'Cuentas normales',
+    'inversion': 'Inversión',
+    'crypto':    'Criptomonedas',
+  };
+
+  cuentas.forEach(c => {
+    const tipo = c.tipo || 'normal';
+    const saldo = saldoReal(c.id);
+    if (saldo <= 0) return;
+    if (!grupos[tipo]) grupos[tipo] = { nombre: c.nombre, valor: 0, color: coloresTipo[tipo] || '#888' };
+    // Si hay varias del mismo tipo, usar el nombre del tipo
+    if (Object.keys(grupos).length > 0 && grupos[tipo].valor > 0) grupos[tipo].nombre = nombresTipo[tipo] || tipo;
+    grupos[tipo].valor += saldo;
+  });
+
+  const entries = Object.entries(grupos).sort((a,b) => b[1].valor - a[1].valor);
+  const total = entries.reduce((s,[,g]) => s + g.valor, 0);
+
+  document.getElementById('patrimonio-total-center').textContent = total.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ' €';
+  document.getElementById('patrimonio-total-bottom').textContent = total.toFixed(2).replace('.',',') + ' €';
+
+  // Gráfico
+  if (chartPatrimonio) { chartPatrimonio.destroy(); chartPatrimonio = null; }
+  const ctx = document.getElementById('chart-patrimonio').getContext('2d');
+  chartPatrimonio = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: entries.map(([,g]) => g.nombre),
+      datasets: [{
+        data: entries.map(([,g]) => g.valor),
+        backgroundColor: entries.map(([,g]) => g.color),
+        borderWidth: 2,
+        borderColor: 'var(--bg)',
+        hoverOffset: 6,
+      }]
+    },
+    options: {
+      cutout: '62%',
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.toFixed(2).replace('.',',')} €` } } },
+      animation: { animateRotate: true }
+    }
+  });
+
+  // Leyenda
+  document.getElementById('patrimonio-legend').innerHTML = entries.map(([,g]) => {
+    const pct = total ? ((g.valor/total)*100).toFixed(1) : 0;
+    return `<div class="patrimonio-legend-item">
+      <div class="patrimonio-legend-left">
+        <div class="patrimonio-dot" style="background:${g.color}"></div>
+        <div>
+          <div class="patrimonio-name">${g.nombre}</div>
+          <div class="patrimonio-val">${g.valor.toFixed(2).replace('.',',')} €</div>
+        </div>
+      </div>
+      <div class="patrimonio-pct" style="color:${g.color}">${pct}%</div>
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('modal-patrimonio-bg').addEventListener('click', function(e){ if(e.target===this) cerrarPatrimonio(); });
+setupSwipeClose('modal-patrimonio-bg', cerrarPatrimonio);
 setupSwipeClose('modal-bg',          cerrarModal);
 setupSwipeClose('modal-ing-bg',      cerrarModalIngreso);
 setupSwipeClose('modal-cuenta-bg',   cerrarModalCuenta);
